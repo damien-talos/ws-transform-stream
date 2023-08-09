@@ -12,18 +12,12 @@ const DEFLATE_EXT_NAME = PerMessageDeflate.extensionName;
 const MINUTE = 60000;
 
 class WsTransformStream extends Duplex {
-
     constructor(options = {}) {
-        const {
-            transform,
-            transformSequential = true,
-            sender = {},
-            receiver = {},
-            compress
-        } = options;
+        const { transform, transformSequential = true, sender = {}, receiver = {}, compress, isToServer = true } = options;
 
         super();
 
+        this._mark = isToServer;
         this._shouldCompress = !!compress;
         this._shouldTransform = typeof transform === 'function';
         this._waiting = false;
@@ -53,11 +47,11 @@ class WsTransformStream extends Duplex {
 
         if (transformSequential) {
             this.queue = new PQueue({ concurrency: 1 });
-            this.receiver.on('message', message => {
+            this.receiver.on('message', (message) => {
                 this.queue.add(() => this._onMessage(message));
             });
         } else {
-            this.receiver.on('message', message => this._onMessage(message));
+            this.receiver.on('message', (message) => this._onMessage(message));
         }
     }
 
@@ -70,22 +64,19 @@ class WsTransformStream extends Duplex {
         let chunk = this.transport.read();
 
         while (chunk && this._reading) {
-            if (this.push(chunk) === false)
-                this._reading = false;
+            if (this.push(chunk) === false) this._reading = false;
 
             chunk = this.transport.read();
         }
 
-        if (this._ended)
-            this.push(null);
+        if (this._ended) this.push(null);
     }
 
     _write(chunk, encoding, cb) {
         if (this._shouldTransform || !this.receiver.isClean()) {
             this.receiver.write(chunk, encoding, cb);
         } else {
-            if (!this.receiver.isFlushed())
-                this.transport.write(this.receiver.flush());
+            if (!this.receiver.isFlushed()) this.transport.write(this.receiver.flush());
 
             this.transport.write(chunk, encoding, cb);
         }
@@ -102,24 +93,25 @@ class WsTransformStream extends Duplex {
     }
 
     _onDataAvailable() {
-        if (this._reading)
-            this._read();
+        if (this._reading) this._read();
     }
 
     _onMessage(message) {
         Promise.resolve(message)
-            .then(input => this._shouldTransform ? this.transform(input) : input)
-            .then(output => {
+            .then((input) => (this._shouldTransform ? this.transform(input) : input))
+            .then((output) => {
                 if (typeof output === 'number') output = output.toString();
 
                 this.sender.send(output, {
                     binary: typeof output !== 'string',
-                    mask: false,
+                    mask: this._mark,
                     compress: this._shouldCompress,
-                    fin: true
+                    fin: true,
                 });
             })
-            .catch(err => this.emit('error', err));
+            .catch((err) => {
+                this.emit('error', err);
+            });
     }
 
     async _onSourceEnd() {
@@ -135,8 +127,7 @@ class WsTransformStream extends Duplex {
     }
 
     async _cleanupSender() {
-        if (this.sender._extensions[DEFLATE_EXT_NAME])
-            this.sender._extensions[DEFLATE_EXT_NAME].cleanup();
+        if (this.sender._extensions[DEFLATE_EXT_NAME]) this.sender._extensions[DEFLATE_EXT_NAME].cleanup();
 
         await waitFor(() => this.sender._bufferedBytes === 0, {
             interval: 50,
@@ -145,11 +136,9 @@ class WsTransformStream extends Duplex {
     }
 
     _cleanupReceiver() {
-        if (this.receiver._extensions[DEFLATE_EXT_NAME])
-            this.receiver._extensions[DEFLATE_EXT_NAME].cleanup();
+        if (this.receiver._extensions[DEFLATE_EXT_NAME]) this.receiver._extensions[DEFLATE_EXT_NAME].cleanup();
 
-        if (!this.receiver.isFlushed())
-            this.transport.write(this.receiver.flush());
+        if (!this.receiver.isFlushed()) this.transport.write(this.receiver.flush());
 
         this.receiver.removeAllListeners();
     }
